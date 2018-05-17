@@ -1,0 +1,312 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+Description: CIS AWS Foundations Benchmark Section 4 - Networking
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+    - Label:
+        default: Profile Level
+      Parameters:
+      - ProfileLevel
+    ParameterLabels:
+      ProfileLevel:
+        default: Profile Level
+Parameters:
+  ProfileLevel:
+    Description: 'Level 1 controls are baseline governance controls, whereas Level
+      2 controls represent redundant or stricter governance controls. See the control
+      list here for guidance: https://benchmarks.cisecurity.org/en-us/?route=downloads.form.awsfoundations.110'
+    Type: String
+    Default: Level 2
+    AllowedValues:
+    - Level 1
+    - Level 2
+  MasterConfigRoleArn:
+    Type: String
+Conditions:
+  GovCloudCondition:
+    !Equals
+    - !Ref AWS::Region
+    - us-gov-west-1
+  IsLevel2:
+    !Equals
+    - Level 2
+    - !Ref ProfileLevel
+Resources:
+# --------------------------------------------------------------------------------------------------------------------------------------------------------
+# CIS AWS Foundations Benchmark - 4.1   Ensure no security groups allow ingress from 0.0.0.0/0 to port 22 (Scored)
+# --------------------------------------------------------------------------------------------------------------------------------------------------------
+  ConfigRuleForEvaluateSecurityGroupsSsh:
+    Type: AWS::Config::ConfigRule
+    Properties:
+      ConfigRuleName: CIS-SecurityGroupsMustRestrictSshTraffic
+      Description: CIS 4.1 - Ensure no security groups allow ingress from 0.0.0.0/0
+        to port 22 (Scored)
+      Scope:
+        ComplianceResourceTypes:
+        - AWS::EC2::SecurityGroup
+      Source:
+        Owner: AWS
+        SourceIdentifier: INCOMING_SSH_DISABLED
+
+# --------------------------------------------------------------------------------------------------------------------------------------------------------
+# CIS AWS Foundations Benchmark - 4.2   Ensure no security groups allow ingress from 0.0.0.0/0 to port 3389 (Scored)
+# --------------------------------------------------------------------------------------------------------------------------------------------------------
+  ConfigRuleForEvaluateSecurityGroupsRdp:
+    Type: AWS::Config::ConfigRule
+    Properties:
+      ConfigRuleName: CIS-SecurityGroupsMustDisallowTcpTraffic
+      Description: CIS 4.2 - Ensure no security groups allow ingress from 0.0.0.0/0
+        to port 3389 (Scored)
+      InputParameters:
+        blockedPort1: '3389'
+      Scope:
+        ComplianceResourceTypes:
+        - AWS::EC2::SecurityGroup
+      Source:
+        Owner: AWS
+        SourceIdentifier: RESTRICTED_INCOMING_TRAFFIC
+
+# --------------------------------------------------------------------------------------------------------------------------------------------------------
+# CIS AWS Foundations Benchmark - 4.3   Ensure VPC flow logging is enabled in all VPCs (Scored)
+# --------------------------------------------------------------------------------------------------------------------------------------------------------
+  EvaluateVpcFlowLogsLambdaInvokePermission:
+    Type: AWS::Lambda::Permission
+    Condition: IsLevel2
+    DependsOn:
+    - FunctionForEvaluateVpcFlowLogs
+    Properties:
+      FunctionName:
+        !GetAtt
+        - FunctionForEvaluateVpcFlowLogs
+        - Arn
+      Action: lambda:InvokeFunction
+      Principal: config.amazonaws.com
+  FunctionForEvaluateVpcFlowLogs:
+    Type: AWS::Lambda::Function
+    Condition: IsLevel2
+    Properties:
+      FunctionName: CIS-EvaluateVpcFlowLogs
+      Description: Evaluates whether VPC flow logging is enabled
+      Code:
+        ZipFile: |
+          import boto3
+          import json
+          def evaluate_compliance(config_item, vpc_id):
+            if (config_item['resourceType'] != 'AWS::EC2::VPC'):
+              return 'NOT_APPLICABLE'
+            elif is_flow_logs_enabled(vpc_id):
+              return 'COMPLIANT'
+            else:
+              return 'NON_COMPLIANT'
+          def is_flow_logs_enabled(vpc_id):
+              ec2 = boto3.client('ec2')
+              # Get the vpc flow logs details
+              response = ec2.describe_flow_logs(
+                Filter=[
+                  {
+                    'Name': 'resource-id',
+                    'Values': [vpc_id,]
+                  },
+                ],
+              )
+              # evaluate vpc flow logs compliance
+              if response['FlowLogs']:
+                return True
+          def lambda_handler(event, context):
+              invoking_event = json.loads(event['invokingEvent'])
+              compliance_value = 'NOT_APPLICABLE'
+              vpc_id = invoking_event['configurationItem']['resourceId']
+              compliance_value = evaluate_compliance(invoking_event['configurationItem'], vpc_id)
+              config = boto3.client('config')
+              response = config.put_evaluations(
+                Evaluations=[
+                  {
+                    'ComplianceResourceType': invoking_event['configurationItem']['resourceType'],
+                    'ComplianceResourceId': vpc_id,
+                    'ComplianceType': compliance_value,
+                    'OrderingTimestamp': invoking_event['configurationItem']['configurationItemCaptureTime']
+                  },
+                ],
+                ResultToken=event['resultToken']
+              )
+      Handler: index.lambda_handler
+      MemorySize: 1024
+      Role: !Ref MasterConfigRoleArn
+      Runtime: python2.7
+      Timeout: 10
+  ConfigRuleForEvaluateVpcFlowLogs:
+    Type: AWS::Config::ConfigRule
+    Condition: IsLevel2
+    DependsOn:
+    - FunctionForEvaluateVpcFlowLogs
+    - EvaluateVpcFlowLogsLambdaInvokePermission
+    Properties:
+      ConfigRuleName: CIS-EvaluateVpcFlowLogs
+      Description: CIS 4.3 - Ensure VPC flow logging is enabled in all VPCs (Scored)
+      Scope:
+        ComplianceResourceTypes:
+        - AWS::EC2::VPC
+      Source:
+        Owner: CUSTOM_LAMBDA
+        SourceDetails:
+        - EventSource: aws.config
+          MessageType: ConfigurationItemChangeNotification
+        SourceIdentifier:
+          !GetAtt
+          - FunctionForEvaluateVpcFlowLogs
+          - Arn
+
+# --------------------------------------------------------------------------------------------------------------------------------------------------------
+# CIS AWS Foundations Benchmark - 4.4   Ensure the default security group of every VPC restricts all traffic (Scored)
+# --------------------------------------------------------------------------------------------------------------------------------------------------------
+  EvaluateDefaultSecurityGroupLambdaInvokePermission:
+    Type: AWS::Lambda::Permission
+    Condition: IsLevel2
+    DependsOn:
+    - FunctionForEvaluateDefaultSecurityGroup
+    Properties:
+      FunctionName:
+        !GetAtt
+        - FunctionForEvaluateDefaultSecurityGroup
+        - Arn
+      Action: lambda:InvokeFunction
+      Principal: config.amazonaws.com
+  FunctionForEvaluateDefaultSecurityGroup:
+    Type: AWS::Lambda::Function
+    Condition: IsLevel2
+    Properties:
+      FunctionName: CIS-EvaluateVpcDefaultSecurityGroups
+      Description: Evaluates whether VPC default security groups restrict all traffic
+      Code:
+        ZipFile: |
+          import boto3
+          import json
+          def lambda_handler(event, context):
+            is_compliant = True
+            invoking_event = json.loads(event['invokingEvent'])
+            annotation = ''
+            security_group_id = invoking_event['configurationItem']['resourceId']
+            # Get security groups details
+            security_group = boto3.client('ec2').describe_security_groups(GroupIds=[security_group_id])['SecurityGroups']
+            # evaluate the default security groups compliance
+            if security_group[0]['GroupName'] == 'default':
+              if security_group[0]['IpPermissions']:
+                annotation = annotation + 'The security group has ingress rules in place.'
+                is_compliant = False
+              if security_group[0]['IpPermissionsEgress']:
+                annotation = annotation + ' The security group has egress rules in place.'
+                is_compliant = False
+              evaluations = [
+                {
+                  'ComplianceResourceType': invoking_event['configurationItem']['resourceType'],
+                  'ComplianceResourceId': security_group_id,
+                  'ComplianceType': 'COMPLIANT' if is_compliant else 'NON_COMPLIANT',
+                  'OrderingTimestamp': invoking_event['configurationItem']['configurationItemCaptureTime']
+                }
+              ]
+              if annotation: evaluations[0]['Annotation'] = annotation
+              response = boto3.client('config').put_evaluations(
+                Evaluations = evaluations,
+                ResultToken = event['resultToken']
+              )
+      Handler: index.lambda_handler
+      MemorySize: 1024
+      Role: !Ref MasterConfigRoleArn
+      Runtime: python2.7
+      Timeout: 10
+  ConfigRuleForEvaluateDefaultSecurityGroup:
+    Type: AWS::Config::ConfigRule
+    Condition: IsLevel2
+    DependsOn:
+    - FunctionForEvaluateDefaultSecurityGroup
+    - EvaluateVpcFlowLogsLambdaInvokePermission
+    Properties:
+      ConfigRuleName: CIS-VpcDefaultSecurityGroupsMustRestrictAllTraffic
+      Description: CIS 4.4 - Ensure the default security group of every VPC restricts
+        all traffic (Scored)
+      Scope:
+        ComplianceResourceTypes:
+        - AWS::EC2::SecurityGroup
+      Source:
+        Owner: CUSTOM_LAMBDA
+        SourceDetails:
+        - EventSource: aws.config
+          MessageType: ConfigurationItemChangeNotification
+        SourceIdentifier:
+          !GetAtt
+          - FunctionForEvaluateDefaultSecurityGroup
+          - Arn
+
+#====================================================================================================
+# CIS 4.5   Ensure routing tables for VPC peering are "least access"
+#====================================================================================================
+  FunctionForVpcPeeringRouteTablesRule:
+    Type: AWS::Lambda::Function
+    Condition: IsLevel2
+    Properties:
+      FunctionName: CIS-EvaluateVpcPeeringRouteTables
+      Code:
+        ZipFile: |
+          #==================================================================================================
+          # Function: EvaluateVpcPeeringRouteTables
+          # Purpose:  Evaluates whether VPC route tables are least access
+          #==================================================================================================
+          import boto3
+          import json
+          def lambda_handler(event, context):
+            is_compliant = True
+            invoking_event = json.loads(event['invokingEvent'])
+            annotation = ''
+            route_table_id = invoking_event['configurationItem']['resourceId']
+            #print (json.dumps(boto3.client('ec2').describe_route_tables(RouteTableIds=[route_table_id])))
+            for route_table in boto3.client('ec2').describe_route_tables(RouteTableIds=[route_table_id])['RouteTables']:
+              for route in route_table['Routes']:
+                if 'VpcPeeringConnectionId' in route:
+                  if int(str(route['DestinationCidrBlock']).split("/", 1)[1]) < 24:
+                    is_compliant = False
+                    annotation = 'VPC peered route table has a large CIDR block destination.'
+                  evaluations = [
+                    {
+                      'ComplianceResourceType': invoking_event['configurationItem']['resourceType'],
+                      'ComplianceResourceId': route_table_id,
+                      'ComplianceType': 'COMPLIANT' if is_compliant else 'NON_COMPLIANT',
+                      'OrderingTimestamp': invoking_event['configurationItem']['configurationItemCaptureTime']
+                    }
+                  ]
+                  if annotation: evaluations[0]['Annotation'] = annotation
+                  response = boto3.client('config').put_evaluations(
+                  Evaluations = evaluations,
+                  ResultToken = event['resultToken'])
+      Description: Evaluates whether VPC peered route tables are least access
+      Handler: index.lambda_handler
+      MemorySize: 1024
+      Role: !Ref MasterConfigRoleArn
+      Runtime: python2.7
+      Timeout: 10
+  ConfigPermissionToCallVpcPeeringRouteTablesLambda:
+    Type: AWS::Lambda::Permission
+    Condition: IsLevel2
+    DependsOn: FunctionForVpcPeeringRouteTablesRule
+    Properties:
+      FunctionName: !GetAtt FunctionForVpcPeeringRouteTablesRule.Arn
+      Action: lambda:InvokeFunction
+      Principal: config.amazonaws.com
+  ConfigRuleForVpcPeeringRouteTabless:
+    Type: AWS::Config::ConfigRule
+    Condition: IsLevel2
+    DependsOn:
+    - FunctionForVpcPeeringRouteTablesRule
+    - ConfigPermissionToCallVpcPeeringRouteTablesLambda
+    Properties:
+      ConfigRuleName: CIS-VpcPeeringRouteTablesMustBeLeastAccess
+      Description: Evaluates whether VPC peered route tables are least access
+      Scope:
+        ComplianceResourceTypes:
+        - AWS::EC2::RouteTable
+      Source:
+        Owner: CUSTOM_LAMBDA
+        SourceDetails:
+        - EventSource: aws.config
+          MessageType: ConfigurationItemChangeNotification
+        SourceIdentifier: !GetAtt FunctionForVpcPeeringRouteTablesRule.Arn

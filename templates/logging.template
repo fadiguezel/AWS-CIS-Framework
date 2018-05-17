@@ -1,0 +1,447 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+Description: CIS AWS Foundations Benchmark Section 2 - Logging
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+    - Label:
+        default: Profile Level
+      Parameters:
+      - ProfileLevel
+    ParameterLabels:
+      ProfileLevel:
+        default: Profile Level
+Parameters:
+  ProfileLevel:
+    Description: 'Level 1 controls are baseline governance controls, whereas Level
+      2 controls represent redundant or stricter governance controls. See the control
+      list here for guidance: https://benchmarks.cisecurity.org/en-us/?route=downloads.form.awsfoundations.110'
+    Type: String
+    Default: Level 2
+    AllowedValues:
+    - Level 1
+    - Level 2
+  MasterConfigRoleArn:
+    Type: String
+Conditions:
+  GovCloudCondition:
+    !Equals
+    - !Ref AWS::Region
+    - us-gov-west-1
+  IsLevel2:
+    !Equals
+    - Level 2
+    - !Ref ProfileLevel
+Resources:
+# --------------------------------------------------------------------------------------------------------------------------------------------------------
+# CIS AWS Foundations Benchmark - 2.1   Ensure CloudTrail is enabled in all regions (Scored)
+# CIS AWS Foundations Benchmark - 2.4   Ensure CloudTrail trails are integrated with CloudWatch Logs (Scored)
+# --------------------------------------------------------------------------------------------------------------------------------------------------------
+  EvaluateCloudTrailEnabledIntegratedLambdaInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName:
+        !GetAtt
+        - FunctionForEvaluateCloudTrailEnabledIntegrated
+        - Arn
+      Action: lambda:InvokeFunction
+      Principal: config.amazonaws.com
+  FunctionForEvaluateCloudTrailEnabledIntegrated:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: CIS-EvaluateCloudTrail
+      Code:
+        ZipFile: |
+          #==================================================================================================
+          # Function: EvaluateCloudTrailEnabledIntegrated
+          # Purpose:  Evaluates CloudTrail for CIS 2.1, 2.4
+          #==================================================================================================
+          import json
+          import boto3
+          import datetime
+          import time
+          client = boto3.client('cloudtrail')
+          def lambda_handler(event, context):
+            is_compliant = True
+            annotation = ''
+            is_multi_region = True
+            is_publicly_accessible = False
+            current_region_trail = {}
+            # List all trails, including 'shadow' trails, which are trails in
+            # other regions that could be capturing multi-regional events
+            for trail in client.describe_trails()['trailList']:
+              if trail['HomeRegion'] == context.invoked_function_arn.split(':')[3]:
+                current_region_trail = trail
+                annotation = ''
+                is_compliant= True
+                is_multi_region = current_region_trail['IsMultiRegionTrail']
+                # Enabled in all regions?
+                if not is_multi_region:
+                  is_compliant = False
+                  annotation = annotation + ' CloudTrail is not enabled in all regions.'
+                # Integration with CloudWatch Logs?
+                if 'CloudWatchLogsLogGroupArn' in current_region_trail and not current_region_trail['CloudWatchLogsLogGroupArn']:
+                  is_compliant = False
+                  annotation = annotation + ' CloudTrail is not integrated with Cloudwatch Logs.'
+                # Check if Trail logging has been turned off
+                trail_details = client.get_trail_status(Name = current_region_trail['Name'])
+                if not trail_details['IsLogging']:
+                  is_compliant = False
+                  annotation = annotation + 'CloudTrail trail is not logging any AWS API calls.'
+                # CloudWatch Logs delivered within the last day
+                if 'LatestCloudWatchLogsDeliveryTime' in trail_details:
+                  # Determine whether the number of minutes since the last delivery time exceeds 24 hours.
+                  if ((int(time.time()) - int(trail_details['LatestCloudWatchLogsDeliveryTime'].strftime("%s"))) / 1440) > 24:
+                    is_compliant = False
+                    annotation = annotation + ' The latest CloudTrail log delivery exceeds 24 hours.'
+                else:
+                  is_compliant = False
+                  annotation = annotation + ' There is no record of CloudTrail log delivery.'
+                # Set up evaluations
+                result_token = 'No token found.'
+                if 'resultToken' in event: result_token = event['resultToken']
+                evaluations = [
+                  {
+                    'ComplianceResourceType': 'AWS::CloudTrail::Trail',
+                    'ComplianceResourceId': current_region_trail['Name'],
+                    'ComplianceType': 'COMPLIANT' if is_compliant else 'NON_COMPLIANT',
+                    'OrderingTimestamp': datetime.datetime.now()
+                  }
+                ]
+                # Is compliant message
+                if is_compliant: annotation = 'CloudTrail is enabled in all regions and trails are integrated with CloudWatch Logs!'
+                if annotation: evaluations[0]['Annotation'] = annotation
+                config = boto3.client('config')
+                #deliver evaluations
+                config.put_evaluations(
+                  Evaluations = evaluations,
+                  ResultToken = result_token
+                )
+      Description: Evaluates whether CloudTrail has appropriate security properties.
+        Meets CIS 2.1, 2.4
+      Handler: index.lambda_handler
+      MemorySize: 1024
+      Role: !Ref MasterConfigRoleArn
+      Runtime: python2.7
+      Timeout: 10
+  ConfigRuleForEvaluateCloudTrailEnabledIntegrated:
+    Type: AWS::Config::ConfigRule
+    DependsOn:
+    - EvaluateCloudTrailEnabledIntegratedLambdaInvokePermission
+    Properties:
+      ConfigRuleName: CIS-CloudTrailMustBeActive
+      Description: CIS 2.1, 2.4 - Ensure CloudTrail is enabled in all regions (Scored),
+        ensure CloudTrail trails are integrated with CloudWatch Logs (Scored)
+      Scope:
+        ComplianceResourceTypes:
+        - AWS::CloudTrail::Trail
+      Source:
+        Owner: CUSTOM_LAMBDA
+        SourceDetails:
+        - EventSource: aws.config
+          MessageType: ConfigurationItemChangeNotification
+        SourceIdentifier:
+          !GetAtt
+          - FunctionForEvaluateCloudTrailEnabledIntegrated
+          - Arn
+
+# --------------------------------------------------------------------------------------------------------------------------------------------------------
+# CIS AWS Foundations Benchmark - 2.3   Ensure the S3 bucket CloudTrail logs to is not publicly accessible (Scored)
+# CIS AWS Foundations Benchmark - 2.6   Ensure S3 Bucket Access Logging is enabled on the CloudTrail S3 bucket (Scored)
+# --------------------------------------------------------------------------------------------------------------------------------------------------------
+  EvaluateCloudTrailS3AccessLoggingLambdaInvokePermission:
+    Type: AWS::Lambda::Permission
+    DependsOn:
+    - FunctionForEvaluateCloudTrailS3AccessLogging
+    Properties:
+      FunctionName:
+        !GetAtt
+        - FunctionForEvaluateCloudTrailS3AccessLogging
+        - Arn
+      Action: lambda:InvokeFunction
+      Principal: config.amazonaws.com
+  FunctionForEvaluateCloudTrailS3AccessLogging:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: CIS-EvaluateCloudTrailBucket
+      Description: Evaluates whether access logging is enabled on the CloudTrail S3
+        bucket and the S3 bucket is not publicly accessible for CIS 2.3, 2.6
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import datetime
+          import time
+          from botocore.exceptions import ClientError
+          def lambda_handler(event, context):
+            # get the trail for the current region
+            client_ct = boto3.client('cloudtrail')
+            for trail in client_ct.describe_trails(includeShadowTrails = False)['trailList']:
+              annotation = ''
+              is_publicly_accessible = False
+              s3_bucket_name = ''
+              is_compliant = True
+              # check if the cloudtrail s3 bucket is publicly accessible and logged
+              if trail['S3BucketName']:
+                s3_bucket_name = trail['S3BucketName']
+                client_s=boto3.client('s3')
+                try:
+                  for grant in client_s.get_bucket_acl(Bucket = s3_bucket_name)['Grants']:
+                    # verify cloudtrail s3 bucket ACL
+                    if grant['Permission'] in ['READ','FULL_CONTROL'] and ('URI' in grant['Grantee'] and ('AuthenticatedUsers' in grant['Grantee']['URI'] or 'AllUsers' in grant['Grantee']['URI'])):
+                      is_publicly_accessible = True
+                  if is_publicly_accessible:
+                    is_compliant = False
+                    annotation = annotation + ' The CloudTrail S3 bucket \'{}\' is publicly accessible.'.format(s3_bucket_name)
+                  # verify cloudtrail s3 bucket logging
+                  response = client_s.get_bucket_logging(Bucket = s3_bucket_name)
+                  if 'LoggingEnabled' not in response:
+                    is_compliant=False
+                    annotation = annotation + ' The CloudTrail S3 bucket \'{}\' does not have logging enabled.'.format(s3_bucket_name)
+                except Exception as ex:
+                  print ex
+                  is_compliant = False
+                  annotation = annotation + ' There was an error looking up CloudTrail S3 bucket \'{}\'.'.format(s3_bucket_name)
+              else:
+                annotation = annotation + ' CloudTrail is not integrated with S3.'
+              result_token = 'No token found.'
+              if 'resultToken' in event: result_token = event['resultToken']
+              evaluations = [
+                {
+                  'ComplianceResourceType': 'AWS::S3::Bucket',
+                  'ComplianceResourceId': s3_bucket_name,
+                  'ComplianceType': 'COMPLIANT' if is_compliant else 'NON_COMPLIANT',
+                  'OrderingTimestamp': datetime.datetime.now()
+                }
+              ]
+              if is_compliant: annotation = 'Acces logging is enabled on the CloudTrail S3 bucket \'{}\' and the S3 bucket is not publicly accessible'.format(s3_bucket_name)
+              if annotation: evaluations[0]['Annotation'] = annotation
+              config = boto3.client('config')
+              config.put_evaluations(
+                Evaluations = evaluations,
+                ResultToken = result_token
+              )
+      Handler: index.lambda_handler
+      MemorySize: 1024
+      Role: !Ref MasterConfigRoleArn
+      Runtime: python2.7
+      Timeout: 10
+  ConfigRuleForEvaluateCloudTrailS3AccessLogging:
+    Type: AWS::Config::ConfigRule
+    DependsOn:
+    - FunctionForEvaluateCloudTrailS3AccessLogging
+    - EvaluateCloudTrailS3AccessLoggingLambdaInvokePermission
+    Properties:
+      ConfigRuleName: CIS-CloudTrailBucketMustBeSecure
+      Description: ConfigRule to evaluate whether access logging is enabled on the
+        CloudTrail S3 bucket and the S3 bucket is not publicly accessible for CIS
+        2.3, 2.6
+      Scope:
+        ComplianceResourceTypes:
+        - AWS::CloudTrail::Trail
+      Source:
+        Owner: CUSTOM_LAMBDA
+        SourceDetails:
+        - EventSource: aws.config
+          MessageType: ConfigurationItemChangeNotification
+        SourceIdentifier:
+          !GetAtt
+          - FunctionForEvaluateCloudTrailS3AccessLogging
+          - Arn
+
+# --------------------------------------------------------------------------------------------------------------------------------------------------------
+# CIS AWS Foundations Benchmark - 2.2   Ensure CloudTrail log file validation is enabled (Scored)
+# CIS AWS Foundations Benchmark - 2.7   Ensure CloudTrail logs are encrypted at rest using KMS CMKs (Scored)
+# --------------------------------------------------------------------------------------------------------------------------------------------------------
+  EvaluateCloudTrailLogsEncryptionValidationLambdaInvokePermission:
+    Type: AWS::Lambda::Permission
+    Condition: IsLevel2
+    DependsOn:
+    - FunctionForEvaluateCloudTrailLogsEncryptionValidation
+    Properties:
+      FunctionName:
+        !GetAtt
+        - FunctionForEvaluateCloudTrailLogsEncryptionValidation
+        - Arn
+      Action: lambda:InvokeFunction
+      Principal: config.amazonaws.com
+  FunctionForEvaluateCloudTrailLogsEncryptionValidation:
+    Type: AWS::Lambda::Function
+    Condition: IsLevel2
+    Properties:
+      FunctionName: CIS-EvaluateCloudTrailLogIntegrity
+      Description: Evaluates whether CloudTrail logs are validated and encrypted at
+        rest
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import datetime
+          import time
+          client_ct = boto3.client('cloudtrail')
+          config = boto3.client('config')
+          def lambda_handler(event, context):
+            for trail in client_ct.describe_trails()['trailList']:
+              is_compliant = True
+              if trail['HomeRegion'] == context.invoked_function_arn.split(':')[3]:
+                current_region_trail = trail
+                annotation = ''
+                # evaluate log file validation
+                if not current_region_trail['LogFileValidationEnabled']:
+                  is_compliant = False
+                  annotation = annotation + ' CloudTrail log file validation is not enabled.'
+                # evaluate log file encryption
+                if not 'KmsKeyId' in current_region_trail:
+                  is_compliant = False
+                  annotation = annotation + ' CloudTrail log files are not encrypted in S3.'
+                result_token = 'No token found.'
+                if 'resultToken' in event: result_token = event['resultToken']
+                evaluations = [
+                  {
+                    'ComplianceResourceType': 'AWS::CloudTrail::Trail',
+                    'ComplianceResourceId': current_region_trail['Name'],
+                    'ComplianceType': 'COMPLIANT' if is_compliant else 'NON_COMPLIANT',
+                    'OrderingTimestamp': datetime.datetime.now()
+                  }
+                ]
+                if is_compliant: annotation = 'CloudTrail log files are encrypted and validated in S3.'
+                if annotation: evaluations[0]['Annotation'] = annotation
+                config.put_evaluations(
+                  Evaluations = evaluations,
+                  ResultToken = result_token
+                )
+      Handler: index.lambda_handler
+      MemorySize: 1024
+      Role: !Ref MasterConfigRoleArn
+      Runtime: python2.7
+      Timeout: 10
+  ConfigRuleForEvaluateCloudTrailLogsEncryptionValidation:
+    Type: AWS::Config::ConfigRule
+    Condition: IsLevel2
+    DependsOn:
+    - FunctionForEvaluateCloudTrailLogsEncryptionValidation
+    - EvaluateCloudTrailLogsEncryptionValidationLambdaInvokePermission
+    Properties:
+      ConfigRuleName: CIS-CloudTrailLogsMustBeValidatedAndEncrypted
+      Description: CIS 2.2, 2.7 - Ensure CloudTrail log file validation is enabled
+        (Scored), ensure CloudTrail logs are encrypted at rest using KMS CMKs (Scored)
+      Scope:
+        ComplianceResourceTypes:
+        - AWS::CloudTrail::Trail
+      Source:
+        Owner: CUSTOM_LAMBDA
+        SourceDetails:
+        - EventSource: aws.config
+          MessageType: ConfigurationItemChangeNotification
+        SourceIdentifier:
+          !GetAtt
+          - FunctionForEvaluateCloudTrailLogsEncryptionValidation
+          - Arn
+
+# --------------------------------------------------------------------------------------------------------------------------------------------------------
+# CIS AWS Foundations Benchmark - 2.8   Ensure rotation for customer created CMKs is enabled (Scored)
+# --------------------------------------------------------------------------------------------------------------------------------------------------------
+  EvaluateCMKsRotationLambdaInvokePermission:
+    Type: AWS::Lambda::Permission
+    Condition: IsLevel2
+    DependsOn:
+    - FunctionForEvaluateCMKsRotation
+    Properties:
+      FunctionName:
+        !GetAtt
+        - FunctionForEvaluateCMKsRotation
+        - Arn
+      Action: lambda:InvokeFunction
+      Principal: config.amazonaws.com
+  FunctionForEvaluateCMKsRotation:
+    Type: AWS::Lambda::Function
+    Condition: IsLevel2
+    Properties:
+      FunctionName: CIS-EvaluateKmsCustomerKeyRotation
+      Description: Evaluates whether existing customer managed keys (CMKs) have key
+        rotation enabled
+      Code:
+        ZipFile: |
+          import boto3
+          import json
+          import datetime
+          def getKeyAlias(keyAliases, keyId):
+            for key in keyAliases:
+              if 'TargetKeyId' in key and key['AliasName'].startswith('alias/aws'):
+                continue
+              if 'TargetKeyId' in key:
+                if key['TargetKeyId'] == keyId:
+                  return key['AliasName']
+            return ''
+          def lambda_handler(event, context):
+            is_compliant = True
+            result_token = 'No token found.'
+            annotation = ''
+            compliance_resource_type = 'N/A'
+            if 'resultToken' in event: result_token = event['resultToken']
+            evaluations = []
+            kms_client = boto3.client('kms')
+            config_client = boto3.client('config')
+            # Get a list of key aliases. This will be used to discard AWS managed keys from rotation consideration.
+            aws_managed_keys = []
+            keyAliases = kms_client.list_aliases()['Aliases']
+            for key in keyAliases:
+              if 'TargetKeyId' in key and key['AliasName'].startswith('alias/aws'):
+                aws_managed_keys.append(key['TargetKeyId'])
+            for key in kms_client.list_keys()['Keys']:
+              # Do not evaluate AWS-managed keys.
+              if not key['KeyId'] in aws_managed_keys:
+                try:
+                  is_compliant = kms_client.get_key_rotation_status(KeyId = key['KeyId'])['KeyRotationEnabled']
+                except:
+                  is_compliant = True
+                keyIdentifier = ''
+                kIdentifier1 =  getKeyAlias(keyAliases, key['KeyId'])
+                if kIdentifier1 == '' :
+                  keyIdentifier = ' KeyId = ' + key['KeyId']
+                else:
+                  keyIdentifier = ' Key Alias = ' + kIdentifier1
+                if is_compliant: annotation = 'Key rotation is enabled for the specified CMK.' +  keyIdentifier
+                else: annotation = 'Key rotation is not enabled for the specified CMK.' + keyIdentifier
+                evaluations.append(
+                  {
+                    'ComplianceResourceType': 'AWS::KMS::Key',
+                    'ComplianceResourceId': key['KeyId'],
+                    'ComplianceType': 'COMPLIANT' if is_compliant else 'NON_COMPLIANT',
+                    'Annotation': annotation,
+                    'OrderingTimestamp': datetime.datetime.now()
+                  }
+                )
+            response = config_client.put_evaluations(
+              Evaluations = evaluations,
+              ResultToken = event['resultToken']
+            )
+      Handler: index.lambda_handler
+      MemorySize: 1024
+      Role: !Ref MasterConfigRoleArn
+      Runtime: python2.7
+      Timeout: 10
+  ConfigRuleForEvaluateCMKsRotation:
+    Type: AWS::Config::ConfigRule
+    Condition: IsLevel2
+    DependsOn:
+    - FunctionForEvaluateCMKsRotation
+    - EvaluateCMKsRotationLambdaInvokePermission
+    Properties:
+      ConfigRuleName: CIS-KmsCustomerKeysMustBeRotated
+      Description: CIS 2.8 - Ensure rotation for customer created CMKs is enabled
+        (Scored).
+      Scope:
+        ComplianceResourceTypes:
+        - AWS::KMS::Key
+      Source:
+        Owner: CUSTOM_LAMBDA
+        SourceDetails:
+        - EventSource: aws.config
+          MessageType: ScheduledNotification
+          MaximumExecutionFrequency: One_Hour
+        SourceIdentifier:
+          !GetAtt
+          - FunctionForEvaluateCMKsRotation
+          - Arn
+...
