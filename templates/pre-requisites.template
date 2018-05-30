@@ -9,6 +9,9 @@ Parameters:
   ConfigureConfig:
     Type: String
     Description: Configures AWS Config regionally.
+  ConfigureDynamoDB:
+    Type: String
+    Description: Configure AWS DynamoDB for exception handling regionally.
   QSS3BucketName:
     Description: S3 bucket name for the Quick Start assets.
     Type: String
@@ -28,6 +31,10 @@ Conditions:
     !Equals
     - 'Yes'
     - !Ref ConfigureConfig
+  configureAWSDynamoDB:
+    !Equals
+    - 'Yes'
+    - !Ref ConfigureDynamoDB
 Resources:
   ConfigureAWSCloudtrailStack:
     Type: AWS::CloudFormation::Stack
@@ -55,4 +62,7 @@ Resources:
             - s3-us-gov-west-1
             - s3
       TimeoutInMinutes: 20
+  ConfigureAWSDynamoDBForExceptionHandlingStack:
+    Type: AWS::CloudFormation::Stack
+    Condition:
 ...

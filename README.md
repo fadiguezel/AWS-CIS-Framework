@@ -1,21 +1,36 @@
-# quickstart-enterprise-accelerator-cis-benchmark
-## CIS AWS Foundations Benchmark in the AWS Cloud
+# AWS CIS Framework
+## CIS AWS Foundations Benchmark++ in the AWS Cloud
 
-This Quick Start deploys and configures a standardized architecture for the Center for Internet Security (CIS) AWS Foundations Benchmark.
+The AWS CIS Framework is a collection of CloudFormation templates for assesing and monitoring the security of you AWS account. The framework is built upon the [AWS CIS Compliance Quick Start](https://github.com/aws-quickstart/quickstart-compliance-cis-benchmark) which deploys and configures a standardized architecture for the Center for Internet Security (CIS) AWS Foundations Benchmark.
 
-CIS Benchmarks are consensus-based configuration guidelines developed by experts in US government, business, industry, and academia to help organizations assess and improve security.
+The CIS Benchmarks are guidelines for best practices developed and maintained by a handful of experts. It's a good starting point for assessing the security of your infrastructure and hardening it. But the benchmark is definitely not the single point of truth. Depending on the company some controls may be obsolete or not applicable. For other companies the exisitng CIS controls may not be sufficient and additional checks need to be implemented. The AWS CIS Compliance Quick Start provides a great way to rollout the benchmark for an account, but it lacks the possibility to modify or extend the CIS controls.
 
-This Quick Start implements the CIS AWS Foundations Benchmark, which is a set of security configuration best practices for hardening AWS accounts, and provides continuous monitoring capabilities for these security configurations.
+## Additional Feautures
 
-The Quick Start supports the benchmark by creating AWS Config rules, Amazon CloudWatch alarms, and CloudWatch Events rules in your AWS account. The deployment is automated by customizable AWS CloudFormation templates and scripts that build and configure the environment in about 10 minutes. The Quick Start also includes a security controls matrix (Microsoft Excel spreadsheet), which shows how the Quick Start components and configuration map to CIS controls. For more information about the recommendations implemented by this Quick Start, see the [CIS AWS Foundations Benchmark specification](https://d0.awsstatic.com/whitepapers/compliance/AWS_CIS_Foundations_Benchmark.pdf) and the [security controls matrix](https://s3.amazonaws.com/quickstart-reference/enterprise-accelerator/cis/benchmark/latest/assets/CIS-Security-Controls-Mapping.xlsx).
+- Modularization - the cis-benchmark template was splitted up into 4 different modules, each representing a section of the CIS Foundation Benchmark.
+- Add exceptions to rules when necessary.
+- Remediation - planned
 
-You can also use the AWS CloudFormation templates as a starting point for your own implementation.
+## Deployment
 
-This Quick Start was built by AWS solutions architects and compliance experts in collaboration with Accenture, an AWS Premier Consulting Partner.
+To deploy the application create a s3 bucket, set the right ACLs and upload the templates using following snippet:
 
-![Quick Start architecture for CIS AWS Foundations Benchmark](https://d0.awsstatic.com/partner-network/QuickStart/datasheets/quickstart-architecture-for-cis-benchmark-on-aws.png)
+### Create bucket
+```bash
+aws s3 mb s3://#{bucket_name} --region eu-central-1
+```
 
-For architectural details, step-by-step instructions, and customization options, see the [deployment guide](https://s3.amazonaws.com/quickstart-reference/enterprise-accelerator/cis/benchmark/latest/doc/cis-benchmark-on-the-aws-cloud.pdf).
+### Put policy on bucket
+Substitute the placeholder in the policy with the name of your bucket. Afterwards run
+```bash
+aws s3api put-bucket-policy --bucket #{bucket_name} --policy file://#{path_to_policy}
+```
 
-To post feedback, submit feature ideas, or report bugs, use the **Issues** section of this GitHub repo.
-If you'd like to submit code for this Quick Start, please review the [AWS Quick Start Contributor's Kit](https://aws-quickstart.github.io/).
+### Upload tempalate files to s3 bucket
+```bash
+aws s3 cp #{path-to-repo}/templates s3://#{bucket_name}/#{prefix}/templates --recursive
+```
+
+### Create the stack
+
+Go to `https://#{region}.console.aws.amazon.com/cloudformation/home` and click on the `Create Stack` button. Choose `Specify an Amazon S3 template URL` and add the link to the `main.template` from the s3 bucket.

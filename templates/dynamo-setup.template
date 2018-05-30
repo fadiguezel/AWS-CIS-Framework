@@ -1,0 +1,21 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+Description: Creating the DynamoDB for exception handling
+Resources:
+  ExceptionsTable:
+    Type: 'AWS::DynamoDB::Table'
+    Properties:
+      AttributeDefinitions:
+        - AttributeName: 'ConfigRule'
+          AttributeType: 'S'
+      KeySchema:
+        - AttributeName: 'ConfigRule'
+          KeyType: 'HASH'
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      ProvisionedThroughput:
+        ReadCapacityUnits: 5
+        WriteCapacityUnits: 5
+      SSESpecification:
+        SSEEnabled: true
+      TableName: 'CIS-ConfigRuleExceptions'

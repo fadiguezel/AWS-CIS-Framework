@@ -168,6 +168,19 @@ Resources:
             - s3:GetBucketAcl
             - s3:GetBucketLogging
             Resource: '*'
+      - PolicyName: DynamoDBQueryAndStream
+        PolicyDocument:
+          Version: 2012-10-17
+          Statement:
+          - Effect: Allow
+            Action:
+            - dynamodb:Query
+            - dynamodb:ListStreams
+            - dynamodb:GetShardIterator
+            - dynamodb:GetRecords
+            - dynamodb:DescribeStream
+            - config:StartConfigRulesEvaluation
+            Resource: '*'
 
 #==================================================================================================
 # Function: EvaluateCisBenchmarkingPreconditions
