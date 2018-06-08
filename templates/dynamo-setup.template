@@ -18,4 +18,116 @@ Resources:
         WriteCapacityUnits: 5
       SSESpecification:
         SSEEnabled: true
+      StreamSpecification:
+        StreamViewType: 'NEW_IMAGE'
       TableName: 'CIS-ConfigRuleExceptions'
+  DynamoDBStreamMapping:
+    Type: "AWS::Lambda::EventSourceMapping"
+    DependsOn:
+      - FunctionForReevaluateConfigRules
+      - ExceptionsTable
+    Properties:
+      Enabled: True
+      EventSourceArn: !GetAtt ExceptionsTable.StreamArn
+      FunctionName: !GetAtt FunctionForReevaluateConfigRules.Arn
+      StartingPosition: LATEST
+# --------------------------------------------------------------------------------------------------------------------------------------------------------
+# Function for re-evaluating config rules after modifying entries in the DynamoDB
+# --------------------------------------------------------------------------------------------------------------------------------------------------------
+  ReevaluateConfigRuleLambdaInvokePermission:
+    Type: AWS::Lambda::Permission
+    DependsOn: FunctionForReevaluateConfigRules
+    Properties:
+      FunctionName:
+        !GetAtt
+        - FunctionForReevaluateConfigRules
+        - Arn
+      Action: lambda:InvokeFunction
+      Principal: dynamodb.amazonaws.com
+  FunctionForReevaluateConfigRules:
+    Type: AWS::Lambda::Function
+    DependsOn: DynamoDBRole
+    Properties:
+      FunctionName: CIS-ReevaluateConfigRule
+      Description: This function is triggered by changes in the exception table and will reevaluate the according config rule
+      Code:
+        ZipFile: |
+          import boto3
+          import json
+          def lambda_handler(event, context):
+            config = boto3.client('config')
+            response = config.start_config_rules_evaluation(
+              ConfigRuleNames=[
+                event['Records'][0]['dynamodb']['Keys']['ConfigRule']['S']
+              ]
+            )
+      Handler: index.lambda_handler
+      MemorySize: 1024
+      Role: !GetAtt DynamoDBRole.Arn
+      Runtime: python2.7
+      Timeout: 10
+
+  FunctionForReevaluateConfigRules:
+    Type: AWS::Lambda::Function
+    DependsOn: DynamoDBRole
+    Properties:
+      FunctionName: CIS-GetExceptions
+      Description: This is a helper function for getting the exceptions for a config rule from the exceptions table
+      Code:
+        ZipFile: |
+          import boto3
+          import json
+          def lambda_handler(event, context):
+            config_rule_name = event['config_rule_name']
+            dynamo = boto3.client('dynamodb')
+            exceptions = dynamo.query(
+              TableName='CIS-ConfigRuleExceptions',
+              KeyConditions={
+                'ConfigRule': {
+                  'ComparisonOperator': 'EQ',
+                  'AttributeValueList': [ {'S': config_rule_name} ]
+                }
+              }
+            )
+        if exceptions['Count'] > 0:
+          return exceptions
+        return 'No exceptions available.'
+      Handler: index.lambda_handler
+      MemorySize: 1024
+      Role: !GetAtt DynamoDBRole.Arn
+      Runtime: python2.7
+      Timeout: 10
+
+  DynamoDBRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - lambda.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Policies:
+      - PolicyName: DynamoDBStreamAndConfig
+        PolicyDocument:
+          Version: 2012-10-17
+          Statement:
+          - Effect: Allow
+            Action:
+            - dynamodb:ListStreams
+            - dynamodb:GetShardIterator
+            - dynamodb:GetRecords
+            - dynamodb:DescribeStream
+            - dynamodb:Query
+            - logs:CreateLogGroup
+            - logs:CreateLogStream
+            - logs:PutLogEvents
+            Resource: '*'
+          - Effect: Allow
+            Action:
+            - config:StartConfigRulesEvaluation
+            Resource: '*'
+...
