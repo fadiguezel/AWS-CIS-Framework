@@ -1,4 +1,7 @@
 # CIS AWS Foundation Framework
+
+Caution, this benchmark is still in development and has some minor bugs. The Readme could use some improvements too, I already know ;)
+
 ## CIS AWS Foundation Benchmark++ in the AWS Cloud
 
 The CIS AWS Foundation Framework is a collection of CloudFormation templates for assesing and monitoring the security of you AWS account. The framework is built upon the [AWS CIS Compliance Quick Start](https://github.com/aws-quickstart/quickstart-compliance-cis-benchmark) which deploys and configures a standardized architecture for the Center for Internet Security (CIS) AWS Foundations Benchmark.

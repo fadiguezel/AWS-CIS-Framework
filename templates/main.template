@@ -89,16 +89,16 @@ Parameters:
   QSS3Region:
     AllowedValues:
       - s3
-      - s3-us-gov-west-1
-      - s3-us-east-1
-      - s3-us-east-2
-      - s3-us-west-1
-      - s3-us-west-2
-      - s3-eu-central-1
-      - s3-eu-west-1
-      - s3-eu-west-2
-      - s3-eu-west-3
-    Default: s3-eu-west-3
+      - s3.us-gov-west-1
+      - s3.us-east-1
+      - s3.us-east-2
+      - s3.us-west-1
+      - s3.us-west-2
+      - s3.eu-central-1
+      - s3.eu-west-1
+      - s3.eu-west-2
+      - s3.eu-west-3
+    Default: s3.eu-west-3
     Description: Region for the s3 bucket
     Type: String
   IdentityAndAccessManagement:

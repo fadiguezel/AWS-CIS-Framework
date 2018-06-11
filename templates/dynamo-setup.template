@@ -67,7 +67,7 @@ Resources:
       Runtime: python2.7
       Timeout: 10
 
-  FunctionForReevaluateConfigRules:
+  FunctionForGetExceptions:
     Type: AWS::Lambda::Function
     DependsOn: DynamoDBRole
     Properties:
@@ -89,9 +89,9 @@ Resources:
                 }
               }
             )
-        if exceptions['Count'] > 0:
-          return exceptions
-        return 'No exceptions available.'
+          if exceptions['Count'] > 0:
+            return exceptions
+          return 'No exceptions available.'
       Handler: index.lambda_handler
       MemorySize: 1024
       Role: !GetAtt DynamoDBRole.Arn
