@@ -89,9 +89,9 @@ Resources:
                 }
               }
             )
-          if exceptions['Count'] > 0:
-            return exceptions
-          return 'No exceptions available.'
+            if exceptions['Count'] > 0:
+              return exceptions
+            return 'No exceptions available.'
       Handler: index.lambda_handler
       MemorySize: 1024
       Role: !GetAtt DynamoDBRole.Arn
