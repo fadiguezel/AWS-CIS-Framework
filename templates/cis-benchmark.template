@@ -148,6 +148,13 @@ Resources:
             - GovCloudCondition
             - aws-us-gov
             - aws
+      - !Sub
+        - arn:${Partition}:iam::aws:policy/service-role/AWSLambdaRole
+        - Partition:
+            !If
+            - GovCloudCondition
+            - aws-us-gov
+            - aws
       Policies:
       - PolicyName: KmsReadOnly
         PolicyDocument:
